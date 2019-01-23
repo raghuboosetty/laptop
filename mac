@@ -1,0 +1,123 @@
+#!/bin/sh
+
+fancy_echo() {
+  local fmt="$1"; shift
+
+  # shellcheck disable=SC2059
+  printf "\n\033[0;32m$fmt\n\033[0m" "$@"
+
+}
+
+app_is_installed() {
+  local app_name
+  app_name=$(echo "$1" | cut -d'-' -f1)
+  find /Applications -iname "$app_name*" -maxdepth 1 | egrep '.*' > /dev/null
+}
+
+HOMEBREW_PREFIX="/usr/local"
+
+if [ -d "$HOMEBREW_PREFIX" ]; then
+  if ! [ -r "$HOMEBREW_PREFIX" ]; then
+    sudo chown -R "$LOGNAME:admin" /usr/local
+  fi
+else
+  sudo mkdir "$HOMEBREW_PREFIX"
+  sudo chflags norestricted "$HOMEBREW_PREFIX"
+  sudo chown -R "$LOGNAME:admin" "$HOMEBREW_PREFIX"
+fi
+
+if ! command -v brew >/dev/null; then
+  fancy_echo "Installing Homebrew ..."
+    curl -fsS \
+      'https://raw.githubusercontent.com/Homebrew/install/master/install' | ruby
+    export PATH="/usr/local/bin:$PATH"
+fi
+
+if brew list | grep -Fq brew-cask; then
+  fancy_echo "Uninstalling old Homebrew-Cask ..."
+  brew uninstall --force brew-cask
+fi
+
+fancy_echo "Updating Homebrew formulae ..."
+# brew update --force # https://github.com/Homebrew/brew/issues/1151
+brew bundle --file=- <<EOF
+tap "homebrew/services"
+tap "universal-ctags/universal-ctags"
+tap "caskroom/cask"
+
+# Java
+cask "java"
+
+# Unix
+brew "git"
+brew "openssl"
+brew "tmux"
+
+# Heroku
+brew "heroku"
+
+# Image manipulation
+brew "imagemagick"
+
+# Testing
+brew "qt@5.5" if MacOS::Xcode.installed?
+
+# Programming language prerequisites and package managers
+brew "libyaml" # should come after openssl
+brew "coreutils"
+brew "yarn"
+# brew "ngrok"
+cask "gpgtools"
+
+# Databases
+brew "mysql", restart_service: :changed
+brew "postgres", restart_service: :changed
+brew "redis", restart_service: :changed
+
+# Tools
+brew "elasticsearch"
+EOF
+
+# NOTE:
+# verify and download
+# to avoid un-necessary downloads and skips
+APP_ARRAY=( "Slack:slack"
+        "Google Chrome:google-chrome"
+        "iTerm:iterm2"
+        "TextMate:textmate"
+        "Skype:skype" )
+
+for app in "${APP_ARRAY[@]}" ; do
+  KEY=${app%%:*}
+  VALUE=${app#*:}
+  if app_is_installed "$KEY"; then
+    echo "Using $KEY"
+  else
+    brew cask install "$VALUE"
+  fi
+done
+
+if brew list | grep --silent "qt@5.5"; then
+  fancy_echo "Symlink qmake binary to /usr/local/bin for Capybara Webkit..."
+  brew unlink qt@5.5
+  brew link --force qt@5.5
+fi
+
+fancy_echo "Update heroku binary..."
+brew unlink heroku
+brew link --force heroku
+
+fancy_echo "Cleaning up old Homebrew formulae ..."
+brew cleanup
+brew cask cleanup
+
+if command rvm &> /dev/null; then
+  fancy_echo "RVM Exists..."
+else
+  fancy_echo "Installing RVM with latest Ruby ..."
+  gpg --keyserver hkp://keys.gnupg.net --recv-keys 409B6B1796C275462A1703113804BB82D39DC0E3 7D2BAF1CF37B13E2069D6956105BD0E739499BDB
+  curl -L https://get.rvm.io | bash -s stable --auto-dotfiles --autolibs=enable --ruby
+fi
+
+echo ""
+echo Done! Cheers $'\360\237\215\272'
